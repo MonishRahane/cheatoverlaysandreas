@@ -3,6 +3,7 @@ package com.example.cheatoverlay
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.graphics.Color
@@ -12,6 +13,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.view.Gravity
+import android.view.ViewGroup
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
@@ -44,6 +46,13 @@ class OverlayService : Service() {
     )
 
     override fun onBind(i: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) stopSelf()
+        return START_NOT_STICKY
+    }
+
+    companion object { const val ACTION_STOP = "com.example.cheatoverlay.STOP" }
 
     override fun onCreate() {
         super.onCreate()
@@ -113,7 +122,19 @@ class OverlayService : Service() {
             textSize = 18f; setTextColor(Color.WHITE); text = "—"
             setPadding(dp(4), dp(2), dp(4), dp(6))
         }
-        panel.addView(display)
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        display.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        header.addView(display)
+        // Back key to the game, hide panel, close overlay completely
+        header.addView(iconButton("◀", "#FF37474F") {
+            KeySender.sendBack { ok -> ui.post { display.text = if (ok) "Back sent" else "No root/Shizuku" } }
+        })
+        header.addView(iconButton("–", "#FF37474F") { hidePanel() })
+        header.addView(iconButton("✕", "#FFC62828") { stopSelf() })
+        panel.addView(header)
 
         // Preset row (one tap sends the full cheat)
         val presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -158,7 +179,7 @@ class OverlayService : Service() {
 
     private fun togglePanel(bubbleParams: WindowManager.LayoutParams) {
         if (panelShown) {
-            wm.removeView(panel); panelShown = false
+            hidePanel()
         } else {
             val p = overlayParams(WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT).apply {
@@ -168,13 +189,27 @@ class OverlayService : Service() {
         }
     }
 
+    private fun hidePanel() {
+        if (panelShown) { runCatching { wm.removeView(panel) }; panelShown = false }
+    }
+
+    private fun iconButton(label: String, color: String, onClick: () -> Unit) = TextView(this).apply {
+        text = label; textSize = 16f; gravity = Gravity.CENTER
+        setTextColor(Color.WHITE)
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor(color))
+        }
+        layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply { leftMargin = dp(6) }
+        setOnClickListener { onClick() }
+    }
+
     private fun updateDisplay() { display.text = if (buffer.isEmpty()) "—" else buffer.toString() }
 
     private fun send(code: String) {
-        if (!KeySender.shizukuReady()) { display.text = "Shizuku not ready"; return }
         display.text = "Sending $code…"
         KeySender.sendCheat(code) { ok ->
-            ui.post { display.text = if (ok) "Sent $code" else "Failed — check Shizuku" }
+            ui.post { display.text = if (ok) "Sent $code" else "Failed — need root or Shizuku (see app)" }
         }
     }
 
@@ -184,6 +219,11 @@ class OverlayService : Service() {
             NotificationChannel("overlay", "Overlay", NotificationManager.IMPORTANCE_LOW))
         return Notification.Builder(this, "overlay")
             .setContentTitle("Cheat Overlay running")
+            .setContentText("Tap Close to remove the floating button")
+            .addAction(Notification.Action.Builder(null, "Close",
+                PendingIntent.getService(this, 0,
+                    Intent(this, OverlayService::class.java).setAction(ACTION_STOP),
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build())
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .build()
     }

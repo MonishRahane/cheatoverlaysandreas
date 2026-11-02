@@ -40,15 +40,7 @@ class MainActivity : Activity() {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 Uri.parse("package:$packageName")))
         }
-        btn("2. Grant Shizuku permission") {
-            try {
-                if (!Shizuku.pingBinder()) {
-                    status.text = "Shizuku is not running. Start it first (Wireless debugging)."
-                } else if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
-                    Shizuku.requestPermission(100)
-                }
-            } catch (e: Throwable) { status.text = "Shizuku not installed." }
-        }
+        btn("2. Check key access (root / Shizuku)") { refresh() }
         btn("3. Start overlay") {
             if (Build.VERSION.SDK_INT >= 33 &&
                 checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -57,22 +49,44 @@ class MainActivity : Activity() {
             startForegroundService(Intent(this, OverlayService::class.java))
         }
         btn("Stop overlay") { stopService(Intent(this, OverlayService::class.java)) }
+        btn("Grant Shizuku permission (optional, only if no root)") {
+            try {
+                if (!Shizuku.pingBinder()) {
+                    status.text = "Shizuku is not running."
+                } else if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+                    Shizuku.requestPermission(100)
+                }
+            } catch (e: Throwable) { status.text = "Shizuku not installed." }
+        }
 
         setContentView(root)
-        Shizuku.addRequestPermissionResultListener(permListener)
+        runCatching { Shizuku.addRequestPermissionResultListener(permListener) }
     }
 
     override fun onResume() { super.onResume(); refresh() }
 
     override fun onDestroy() {
-        Shizuku.removeRequestPermissionResultListener(permListener)
+        runCatching { Shizuku.removeRequestPermissionResultListener(permListener) }
         super.onDestroy()
     }
 
+    // Back button simply closes this screen; the overlay keeps running until you press ✕.
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() { finish() }
+
     private fun refresh() {
         val overlay = Settings.canDrawOverlays(this)
-        val shizuku = KeySender.shizukuReady()
-        status.text = "Overlay permission: ${if (overlay) "OK" else "missing"}\n" +
-            "Shizuku: ${if (shizuku) "ready" else "not ready"}\n"
+        status.text = "Overlay permission: ${if (overlay) "OK" else "missing"}\nKey access: checking…"
+        Thread {
+            val m = KeySender.detect(force = true)
+            val text = when (m) {
+                KeySender.Mode.ROOT -> "Root"
+                KeySender.Mode.SHIZUKU -> "Shizuku"
+                KeySender.Mode.NONE -> "NOT available (needs root or Shizuku)"
+            }
+            runOnUiThread {
+                status.text = "Overlay permission: ${if (overlay) "OK" else "missing"}\nKey access: $text"
+            }
+        }.start()
     }
 }
